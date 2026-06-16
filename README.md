@@ -19,3 +19,7 @@ Note: If unable to hear output from the pi, may need to force system volume to m
 ```
 amixer set PCM unmute && amixer set PCM 100%
 ```
+
+```
+crontab crontab_settings.txt
+```
