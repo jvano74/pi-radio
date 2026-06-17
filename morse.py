@@ -1,22 +1,14 @@
-import time
 import os
+import time
 import numpy as np
 import pygame
+import scipy.io.wavfile as wav
 
-# --- CONFIGURATION ---
-TEXT_FILE = "message.txt"  # Path to your text file
-INTRO_FILE = "intro.wav"  # Pre-recorded intro voice file
-OUTRO_FILE = "outro.wav"  # Pre-recorded outro voice file
-
-SAMPLE_RATE = 44100  # Audio sample rate (44.1kHz standard)
-FREQUENCY = 800  # Pitch of the Morse tone in Hz
-DOT_DURATION = 0.2  # Speed: Duration of a dot in seconds
-
-# Calculate relative Morse timings
-DASH_DURATION = DOT_DURATION * 3
-SYMBOL_SPACE = DOT_DURATION
-LETTER_SPACE = DOT_DURATION * 3
-WORD_SPACE = DOT_DURATION * 7
+# --- GENERAL CONFIGURATION ---
+TEXT_FILE = "message.txt"
+INTRO_FILE = "intro.wav"
+OUTRO_FILE = "outro.wav"
+SAMPLE_RATE = 44100
 
 # Morse Code Dictionary
 MORSE_DICT = {
@@ -63,89 +55,187 @@ MORSE_DICT = {
     "-": "-....-",
     "(": "-.--.",
     ")": "-.--.-",
-    " ": " ",
 }
 
-# Initialize Pygame Mixer
-pygame.mixer.init(frequency=SAMPLE_RATE, size=-16, channels=1)
+# -------------------------------------------------------------------------
+# 1. GENERATION ENGINE (The "Init" Functionality)
+# -------------------------------------------------------------------------
 
 
-def generate_beep_sound(duration):
-    """Generates a raw sine wave array and converts it into a Pygame Sound."""
-    num_samples = int(SAMPLE_RATE * duration)
-    t = np.linspace(0, duration, num_samples, endpoint=False)
-    wave = np.sin(2 * np.pi * FREQUENCY * t) * 32767
-    wave = wave.astype(np.int16)
-    return pygame.sndarray.make_sound(wave)
+def generate_profile(profile_name, frequency=800, dot_duration=0.2):
+    """
+    Generates a full directory of .wav files for each Morse code character
+    based on the specified frequency (pitch) and dot duration (speed).
+    """
+    profile_dir = os.path.join("profiles", profile_name)
+    os.makedirs(profile_dir, exist_ok=True)
+    print(f"\nInitializing and generating profile: '{profile_name}'...")
+    print(f"Settings: Pitch={frequency}Hz, Speed={dot_duration}s per dot")
+
+    # Internal timing math
+    dash_duration = dot_duration * 3
+    symbol_space_duration = dot_duration
+    letter_space_duration = dot_duration * 3
+
+    def make_tone_array(duration):
+        """Helper to create a raw numpy sine wave array."""
+        num_samples = int(SAMPLE_RATE * duration)
+        t = np.linspace(0, duration, num_samples, endpoint=False)
+        wave = np.sin(2 * np.pi * frequency * t) * 32767
+        return wave.astype(np.int16)
+
+    # Pre-build our primitive building blocks
+    dot_wave = make_tone_array(dot_duration)
+    dash_wave = make_tone_array(dash_duration)
+    symbol_space_wave = np.zeros(
+        int(SAMPLE_RATE * symbol_space_duration), dtype=np.int16
+    )
+
+    # The trailing gap added to the end of a complete letter's sound file
+    # We subtract one symbol space because the last symbol element already included it
+    letter_space_wave = np.zeros(
+        int(SAMPLE_RATE * (letter_space_duration - symbol_space_duration)),
+        dtype=np.int16,
+    )
+
+    # Generate a separate .wav file for every character mapping
+    for char, code in MORSE_DICT.items():
+        char_wave_components = []
+
+        for symbol in code:
+            if symbol == ".":
+                char_wave_components.append(dot_wave)
+            elif symbol == "-":
+                char_wave_components.append(dash_wave)
+
+            # Intracharacter pause (space between dots/dashes)
+            char_wave_components.append(symbol_space_wave)
+
+        # Append the letter-boundary padding at the very end
+        char_wave_components.append(letter_space_wave)
+
+        # Merge arrays into one contiguous audio track for this single letter
+        final_char_wave = np.concatenate(char_wave_components)
+
+        # Save file (Handle special naming for filesystem-sensitive characters)
+        filename = f"char_{ord(char)}.wav"
+        file_path = os.path.join(profile_dir, filename)
+        wav.write(file_path, SAMPLE_RATE, final_char_wave)
+
+    # Also build and save a standard word space interval file for convenience
+    word_space_duration = dot_duration * 7
+    # Subtract letter space duration since the last letter already padded the timeline
+    word_space_wave = np.zeros(
+        int(SAMPLE_RATE * (word_space_duration - letter_space_duration)), dtype=np.int16
+    )
+    wav.write(os.path.join(profile_dir, "word_space.wav"), SAMPLE_RATE, word_space_wave)
+
+    print(f"Profile '{profile_name}' successfully compiled to disk.")
 
 
-# Pre-generate Dot and Dash audio clips
-dot_sound = generate_beep_sound(DOT_DURATION)
-dash_sound = generate_beep_sound(DASH_DURATION)
+# -------------------------------------------------------------------------
+# 2. PLAYBACK ENGINE
+# -------------------------------------------------------------------------
 
 
 def play_voice_file(file_path):
-    """Loads and plays an external voice recording, waiting until it finishes."""
+    """Loads and plays an external voice recording, stalling until finished."""
     if os.path.exists(file_path):
         print(f"Playing voice announcement: {file_path}")
         voice_sound = pygame.mixer.Sound(file_path)
         voice_sound.play()
-
-        # Keep the script paused until the voice track finishes playing
         while pygame.mixer.get_busy():
             time.sleep(0.1)
     else:
         print(f"Warning: Voice file '{file_path}' not found. Skipping.")
 
 
-def play_morse(text):
-    """Processes text and plays it through the audio jack/HDMI."""
-    cleaned_text = text.upper().strip()
+def play_morse_from_profile(text, profile_name):
+    """Reads a text string and matches characters to pre-baked profile .wav files."""
+    profile_dir = os.path.join("profiles", profile_name)
 
-    for word in cleaned_text.split("\n").split(" "):
+    if not os.path.isdir(profile_dir):
+        print(
+            f"Error: The profile '{profile_name}' does not exist! Run generator first."
+        )
+        return
+
+    cleaned_text = text.upper().strip()
+    words = cleaned_text.split()
+
+    # Pre-load the word space audio tracking file
+    word_space_path = os.path.join(profile_dir, "word_space.wav")
+    word_space_sound = (
+        pygame.mixer.Sound(word_space_path) if os.path.exists(word_space_path) else None
+    )
+
+    for i, word in enumerate(words):
         for letter in word:
             if letter not in MORSE_DICT:
-                print(" [Unknown Character] ")
-                time.sleep(WORD_SPACE)
-            code = MORSE_DICT[letter]
-            print(f"{letter}: {code}")
+                print(f" [Unknown Character skipped: {letter}] ")
+                continue
 
-            for symbol in code:
-                if symbol == ".":
-                    dot_sound.play()
-                    time.sleep(DOT_DURATION)
-                elif symbol == "-":
-                    dash_sound.play()
-                    time.sleep(DASH_DURATION)
-                time.sleep(SYMBOL_SPACE)
+            filename = f"char_{ord(letter)}.wav"
+            file_path = os.path.join(profile_dir, filename)
 
-            time.sleep(LETTER_SPACE - SYMBOL_SPACE)
+            if os.path.exists(file_path):
+                print(f"{letter}: {MORSE_DICT[letter]}")
+                char_sound = pygame.mixer.Sound(file_path)
+                char_sound.play()
 
-        print(" [Word Space] ")
-        time.sleep(WORD_SPACE)
+                # Block execution while this specific letter file plays out entirely
+                while pygame.mixer.get_busy():
+                    time.sleep(0.01)
+            else:
+                print(f"Warning: Missing .wav file for character: {letter}")
+
+        # Inject word gap audio file between word loops
+        if i < len(words) - 1 and word_space_sound:
+            print(" [Word Space] ")
+            word_space_sound.play()
+            while pygame.mixer.get_busy():
+                time.sleep(0.01)
+
+
+# -------------------------------------------------------------------------
+# MAIN EXECUTION ROUTINE
+# -------------------------------------------------------------------------
 
 
 def main():
+    # --- SETUP / INITIALIZATION PHASES (Run this when settings change) ---
+    # Create distinct profiles to demonstrate different speeds/pitches
+    generate_profile(profile_name="standard_12wpm", frequency=800, dot_duration=0.2)
+    generate_profile(profile_name="fast_high_pitch", frequency=1000, dot_duration=0.08)
+    generate_profile(profile_name="slow_heavy_tone", frequency=500, dot_duration=0.35)
+
+    # --- SELECT YOUR ACTIVE RUNTIME PROFILE HERE ---
+    ACTIVE_PROFILE = "fast_high_pitch"
+
+    # Check text payload
     if not os.path.exists(TEXT_FILE):
         with open(TEXT_FILE, "w") as f:
             f.write("Hello World")
-        print(f"Created a sample text file at '{TEXT_FILE}'.")
+        print(f"\nCreated a sample text file at '{TEXT_FILE}'.")
 
     with open(TEXT_FILE, "r") as f:
         file_content = f.read()
 
-    print("Starting broadcast audio sequence... Press Ctrl+C to stop.")
+    # Initialize Pygame audio playback architecture
+    pygame.mixer.init(frequency=SAMPLE_RATE, size=-16, channels=1)
+
+    print(f"\nStarting broadcast sequence using profile [{ACTIVE_PROFILE}]...")
     try:
-        # 1. Play "Message follows" voice clip
+        # 1. Play "Message follows"
         play_voice_file(INTRO_FILE)
-        time.sleep(1.5)  # Brief pause after voice before Morse starts
+        time.sleep(1.0)
 
-        # 2. Play the Morse code
-        print("Playing Morse Code...")
-        play_morse(file_content)
-        time.sleep(1.5)  # Brief pause after Morse finishes
+        # 2. Play the pre-baked character file sequences
+        print(f"Streaming Morse Code from directory: 'profiles/{ACTIVE_PROFILE}/'...")
+        play_morse_from_profile(file_content, ACTIVE_PROFILE)
+        time.sleep(1.0)
 
-        # 3. Play "Message will repeat..." voice clip
+        # 3. Play "Message will repeat..."
         play_voice_file(OUTRO_FILE)
 
     except KeyboardInterrupt:
