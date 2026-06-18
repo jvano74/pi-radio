@@ -1,3 +1,1 @@
-this is a test message
-this is only a test
-this concludes the test
+welcome to camp

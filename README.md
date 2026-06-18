@@ -6,7 +6,7 @@ This script is intended to turn a radio into a transmitter for a fox hunts or si
 ## Setup
 
 ```
-pip3 install pygame numpy
+pip3 install pygame numpy scipy
 ```
 
 Audio setup:

@@ -1,0 +1,5 @@
+[SETTINGS]
+ACTIVE_PROFILE = slow_heavy_tone
+INTRO_FILE = intro.wav
+OUTRO_FILE = outro.wav
+TEXT_FILE = message.txt
