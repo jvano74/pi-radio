@@ -133,7 +133,8 @@ def generate_profile(profile_name, frequency=800, dot_duration=0.2):
         char_wave_components.append(letter_space_wave)
         final_char_wave = np.concatenate(char_wave_components)
 
-        file_path = get_filename(profile_dir, char)
+        code = get_code(char)
+        file_path = os.path.join(profile_dir, f"{code}.wav")
         wav.write(file_path, SAMPLE_RATE, final_char_wave)
 
     # Build and save word space interval tracking audio file
